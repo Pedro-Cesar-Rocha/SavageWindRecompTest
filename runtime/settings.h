@@ -42,8 +42,8 @@ enum { SHADOW_CONSOLE = 0, SHADOW_HIGH = 1 /* 2048 */, SHADOW_ULTRA = 2 /* 4096 
        SHADOW_POTATO = 4 /* 448 */, SHADOW_COUNT };
 enum { PERF_OFF = 0, PERF_FPS = 1, PERF_FULL = 2 };
 // Frame rate (Video > Frame rate; runtime/hle/framepace.c): frames per second, 0 = no limit. The game's clock is the
-// same at every rate. The console runs the game at 30. 75 is for 75 Hz displays: without it Match display picked 60
-// there, and no choice held the game at the display's own rate.
+// same at every rate. The console runs the game at 30. 75 is for 75 Hz displays: Match display gives them 75, but no
+// choice of the list did, and a frame_rate = 75 line loaded as 60.
 #define FPS_DEFAULT 60
 #define FPS_CHOICES {0, 30, 60, 75, 90, 120, 144, 165, 240, 360}
 // PC handhelds (settings_handheld): 40 for a screen at 40 or 80 Hz, 45 at 90 Hz; no Off, no Match display
@@ -228,7 +228,6 @@ extern Settings g_settings;
 
 void settings_load(void);
 void settings_save(void);
-// Frame rate > Match display: fps_limit becomes the highest offered rate the display (hz) can show, at least 30 (a
-// 280 Hz display: 240; a 75 Hz one: 75; a 60 Hz one: 60). Nothing with another rate chosen or hz unknown
-// (runtime/window_size.c).
+// Frame rate > Match display: fps_limit becomes the display's own rate (hz), rounded, up to 360 (a 239.77 Hz display:
+// 240; a 75 Hz one: 75). Nothing with another rate chosen or hz unknown (runtime/window_size.c).
 void settings_fps_for_display(float hz);

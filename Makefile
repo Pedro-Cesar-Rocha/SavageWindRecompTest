@@ -552,7 +552,7 @@ $(B)/test_frame_rate: tests/test_frame_rate.c runtime/settings.c runtime/setting
 test-frame-rate: $(B)/test_frame_rate
 	@set -e; tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
 	 for c in "75 60 75 0" "80 60 75 0" "90 75 90 0" "off 75 0 0" "display 75 75 1" "display 60 60 1" \
-	          "display 100 90 1"; do \
+	          "display 100 100 1"; do \
 	   set -- $$c; \
 	   printf 'settings_version = 3\nframe_rate = %s\n' "$$1" > "$$tmp"; \
 	   $(B)/test_frame_rate "$$tmp" "$$2" "$$3" "$$4"; \

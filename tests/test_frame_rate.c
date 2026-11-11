@@ -29,9 +29,9 @@ int main(int argc, char **argv) {
     bool has75 = false;
     for (int i = 0; i < n; i++) has75 |= list[i] == 75;
     assert(has75 && n <= FPS_CHOICES_MAX);
-    // Match display: the highest offered rate the display shows (within 1 Hz), at least 30
-    static const struct { float hz; int fps; } match[] = {{59.94f, 60}, {60, 60}, {74.97f, 75}, {75, 75}, {100, 90},
-                                                          {120, 120}, {144, 144}, {165, 165}, {280, 240}, {25, 30}};
+    // Match display: the display's own rate, rounded, up to 360 (settings_fps_for_display)
+    static const struct { float hz; int fps; } match[] = {{59.94f, 60}, {60, 60}, {74.97f, 75}, {75, 75}, {100, 100},
+                                                          {144, 144}, {239.77f, 240}, {400, 360}};
     g_settings.fps_display = true;
     for (unsigned i = 0; i < sizeof match / sizeof *match; i++) {
         settings_fps_for_display(match[i].hz);
