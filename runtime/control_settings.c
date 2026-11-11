@@ -196,7 +196,7 @@ static void cmd_set(int argc, char **argv, ControlReply *r) {
         bool offered = false;
         for (int i = 0; i < nfps; i++) offered |= fps[i] == v;
         if (!offered) {
-            control_fail(r, settings_handheld() ? "fps must be 30, 40, 45 or 60" : "fps must be 0 (unlimited), 30, 60, 90, 120, 144, 165, 240 or 360");
+            control_fail(r, settings_handheld() ? "fps must be 30, 40, 45 or 60" : "fps must be 0 (unlimited), 30, 60, 75, 90, 120, 144, 165, 240 or 360");
             return;
         }
     }

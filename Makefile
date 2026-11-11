@@ -527,6 +527,24 @@ test-gpu-settings: $(B)/test_gpu_settings
 
 .PHONY: test-gpu-settings
 
+# Frame rate choices: Match display's pick per refresh rate, and frame_rate lines (ini value, display Hz, expected rate,
+# expected Match display) loaded, saved and loaded again
+$(B)/test_frame_rate: tests/test_frame_rate.c runtime/settings.c runtime/settings.h runtime/hle/bindings.c
+	@mkdir -p $(dir $@)
+	$(CC) -O1 -DSDL_STATIC_LIB $(OSFLAGS) $(DEPINC) -Iruntime -o $@ $< -lSDL3 -lm
+
+test-frame-rate: $(B)/test_frame_rate
+	@set -e; tmp=$$(mktemp); trap 'rm -f "$$tmp"' EXIT; \
+	 for c in "75 60 75 0" "80 60 75 0" "90 75 90 0" "off 75 0 0" "display 75 75 1" "display 60 60 1" \
+	          "display 100 90 1"; do \
+	   set -- $$c; \
+	   printf 'settings_version = 3\nframe_rate = %s\n' "$$1" > "$$tmp"; \
+	   $(B)/test_frame_rate "$$tmp" "$$2" "$$3" "$$4"; \
+	   $(B)/test_frame_rate "$$tmp" "$$2" "$$3" "$$4"; \
+	 done
+
+.PHONY: test-frame-rate
+
 $(B)/test_hud_scale: tests/test_hud_scale.c runtime/nvn/hud_scale.h
 	@mkdir -p $(dir $@)
 	$(CC) -O1 -Iruntime -o $@ $< -lm

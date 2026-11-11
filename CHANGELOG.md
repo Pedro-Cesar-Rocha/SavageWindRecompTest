@@ -4,7 +4,7 @@ What changed in each Savage Wind release. The `test` branch holds what the next 
 
 ## Next (on the `test` branch)
 
-Nothing yet.
+- **Frame rate:** 75 fps, for 75 Hz displays; Match display picks it there instead of 60.
 
 ## Alpha 5 (0.5.0-alpha.5) - 2026-11-08
 

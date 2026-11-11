@@ -42,12 +42,13 @@ enum { SHADOW_CONSOLE = 0, SHADOW_HIGH = 1 /* 2048 */, SHADOW_ULTRA = 2 /* 4096 
        SHADOW_POTATO = 4 /* 448 */, SHADOW_COUNT };
 enum { PERF_OFF = 0, PERF_FPS = 1, PERF_FULL = 2 };
 // Frame rate (Video > Frame rate; runtime/hle/framepace.c): frames per second, 0 = no limit. The game's clock is the
-// same at every rate. The console runs the game at 30.
+// same at every rate. The console runs the game at 30. 75 is for 75 Hz displays: without it Match display picked 60
+// there, and no choice held the game at the display's own rate.
 #define FPS_DEFAULT 60
-#define FPS_CHOICES {0, 30, 60, 90, 120, 144, 165, 240, 360}
+#define FPS_CHOICES {0, 30, 60, 75, 90, 120, 144, 165, 240, 360}
 // PC handhelds (settings_handheld): 40 for a screen at 40 or 80 Hz, 45 at 90 Hz; no Off, no Match display
 #define FPS_CHOICES_HANDHELD {30, 40, 45, 60}
-#define FPS_CHOICES_MAX 9
+#define FPS_CHOICES_MAX 10
 int fps_choices(const int **list);  // this machine's frame rates (FPS_CHOICES, or FPS_CHOICES_HANDHELD): their count
 // VSync (Video > VSync; runtime/nvn/vulkan/device.c picks the present mode): On waits for the display (FIFO; with
 // G-SYNC / FreeSync the display waits for the game instead), Fast shows the newest frame at each refresh (MAILBOX),
@@ -221,5 +222,6 @@ extern Settings g_settings;
 void settings_load(void);
 void settings_save(void);
 // Frame rate > Match display: fps_limit becomes the highest offered rate the display (hz) can show, at least 30 (a
-// 280 Hz display: 240; a 60 Hz one: 60). Nothing with another rate chosen or hz unknown (runtime/window_size.c).
+// 280 Hz display: 240; a 75 Hz one: 75; a 60 Hz one: 60). Nothing with another rate chosen or hz unknown
+// (runtime/window_size.c).
 void settings_fps_for_display(float hz);
