@@ -1,0 +1,57 @@
+# The fork's own Windows builds: when a release is published on this fork, build the Windows zip of its tag the way
+# docs/BUILD-windows.md "Package" does (LGPL FFmpeg, the game code generator, the compiler, make dist: no game code
+# inside) and attach it to that release. Not for Revivedx/SavageWindRecomp: leave this file out of pull requests there
+# (it never runs there either). The zip is not signed (the signing key is upstream's), so SW Update never offers it:
+# it is installed by hand, extracted over the Savage Wind folder.
+name: Fork release (Windows zip)
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write  # (the zip attached to the release)
+
+jobs:
+  windows:
+    if: github.repository != 'Revivedx/SavageWindRecomp'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7  # (the release's tag)
+      - uses: actions/setup-python@v5  # (a python.org CPython 3.12 for the generator helper: make gen-helper)
+        with:
+          python-version: '3.12'
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make zip unzip curl diffutils
+            mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-vulkan-headers mingw-w64-ucrt-x86_64-vulkan-loader
+            mingw-w64-ucrt-x86_64-shaderc mingw-w64-ucrt-x86_64-spirv-tools mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-nasm mingw-w64-ucrt-x86_64-python
+      - name: LGPL FFmpeg (make deps-windows)
+        run: make deps-windows
+      - name: Game code generator (make gen-helper)
+        run: make gen-helper GEN_PY="$(cygpath -u '${{ env.pythonLocation }}')/python.exe"
+      - name: Compiler (tools/fetch_zig.sh)
+        run: tools/fetch_zig.sh
+      - name: Package (make dist)
+        run: make -j"$(nproc)" dist
+      - name: Attach to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $zip = Get-ChildItem build/dist -Filter 'SavageWind-*-windows.zip' | Select-Object -First 1
+          if (-not $zip) { throw "make dist made no zip" }
+          $name = "SavageWind-$env:TAG-windows.zip"
+          Copy-Item $zip.FullName $name
+          (Get-FileHash $name -Algorithm SHA256).Hash.ToLower() + "  $name" | Out-File -Encoding ascii "$name.sha256"
+          gh release upload $env:TAG $name "$name.sha256" --repo $env:GITHUB_REPOSITORY --clobber
