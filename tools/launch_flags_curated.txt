@@ -31,6 +31,7 @@ launcher SAVAGEWIND_SETUP_FROM | | Starts the game files setup by itself.
 launcher SAVAGEWIND_EXIT_AT | | Closes the game after a number of frames.
 launcher SAVAGEWIND_EXIT_AFTER_SHOT | | Closes the game after a screenshot.
 launcher SAVAGEWIND_LAUNCHER_AUTOPLAY | | Test hook of the start screen.
+launcher SAVAGEWIND_LAUNCHER_AUTOUPDATE | | Test hook of the start screen.
 launcher SAVAGEWIND_LAUNCHER_DELETE | | Test hook of the start screen.
 launcher SAVAGEWIND_LAUNCHER_EXTRACT | | Test hook of the start screen.
 launcher SAVAGEWIND_LAUNCHER_FONT | | Test hook of the start screen.
