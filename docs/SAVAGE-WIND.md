@@ -1141,9 +1141,10 @@ Pendiente:
      nada de esto: corren antes de todo el buffer principal, así que no ordenan nada de lo que este graba (antes el
      primer pase tras cada envío con subidas iba tras una barrera completa). `SAVAGEWIND_VK_LAZY_BARRIERS=0`: una
      barrera antes de cada pase, como antes; también apagado en Mali y con `SAVAGEWIND_VK_FULL_PASS_BARRIER` o
-     `SAVAGEWIND_VK_BARRIER_FRAG`. La línea `[vk] t=` cuenta los pases sin barrera y los que un draw hizo empezar de
-     nuevo. Las decisiones se prueban sobre pases sintéticos (`tools/test_lazy_barriers.py`); sin medir aún en una GPU
-     ni con la validación de sincronización.
+     `SAVAGEWIND_VK_BARRIER_FRAG`. La línea `[vk] t=` da las barreras del buffer principal (`barriers full`: antes de
+     copias, dispatch y pases de post, y el pase que les sigue; `pass`: las de los pases), los pases sin barrera
+     (`passes without`) y los que un draw hizo empezar de nuevo (`restarts`). Las decisiones se prueban sobre pases
+     sintéticos (`tools/test_lazy_barriers.py`); sin medir aún en una GPU ni con la validación de sincronización.
    - Fallos gráficos que quedaban en la Alpha 2 (2026-10-22):
      - Consulta de oclusión del sol: `ReportCounter` con `SAMPLES_PASSED` (tipo 1) devolvía siempre 0 muestras y
        `ResetCounter` no hacía nada. BOTW dibuja una vez por frame el disco del sol con prueba de profundidad y sin

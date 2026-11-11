@@ -355,6 +355,7 @@ static bool lb_force;          // a draw about to be recorded needs the barrier 
 static bool lb_open;           // the pass in progress began without a barrier
 static uint32_t lb_passes;     // passes begun since the last barrier
 static uint64_t stat_lazy_skipped, stat_lazy_restarts;
+static uint64_t stat_full_barriers, stat_pass_barriers;  // barriers in the main buffer: full ones, the passes' own
 static void lb_reset(void) {  // (a barrier: everything before it is done and visible)
     lb_epoch++;
     lb_force = false;
@@ -390,6 +391,7 @@ void vk_full_barrier(VkCommandBuffer cb) {
     // those recorded while a pass is open: a texture uploaded for its draw), so they order nothing the main buffer
     // records. The pass after a submission with uploads then began behind a full barrier; now it is judged by what it
     // reads and draws into, as any other.
+    if (cb == subs[cur_sub].main) stat_full_barriers++;
     if (cb != subs[cur_sub].main && lazy_barriers_on > 0) return;
     vtx_hazard = true;  // (begin_pass clears it after its own)
     after_dispatch = false;
@@ -424,6 +426,7 @@ static void pass_barrier(VkCommandBuffer cb) {
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb,
                            .imageMemoryBarrierCount = (uint32_t)bar_n, .pImageMemoryBarriers = ib};
     rec_CmdPipelineBarrier2(cb, &di);
+    stat_pass_barriers++;
     bar_n = 0;
     lb_reset();
 }
@@ -1373,10 +1376,15 @@ const char *renderer_stats(void) {
             snprintf(stats_text + n, sizeof stats_text - n, ", frame timers: GPU %.1f ms, given %.1f ms",
                      __atomic_load_n(&dr_frame_ns, __ATOMIC_RELAXED) / 1e6, dr_report_ns() / 1e6);
         n = strlen(stats_text);
-        if (lazy_barriers_on > 0)  // (passes begun without a barrier, and the ones a draw began again behind one)
-            snprintf(stats_text + n, sizeof stats_text - n, ", pass barriers skipped %llu (restarts %llu)",
+        // (barriers in the main command buffer: full ones - before copies, dispatches and post passes, and the pass after
+        // them - and the ones passes began behind; then the passes begun without one, and those a draw began again)
+        snprintf(stats_text + n, sizeof stats_text - n, ", barriers full %llu pass %llu", (unsigned long long)stat_full_barriers,
+                 (unsigned long long)stat_pass_barriers);
+        n = strlen(stats_text);
+        if (lazy_barriers_on > 0)
+            snprintf(stats_text + n, sizeof stats_text - n, ", passes without %llu (restarts %llu)",
                      (unsigned long long)stat_lazy_skipped, (unsigned long long)stat_lazy_restarts);
-        stat_lazy_skipped = stat_lazy_restarts = 0;
+        stat_lazy_skipped = stat_lazy_restarts = stat_full_barriers = stat_pass_barriers = 0;
         n = strlen(stats_text);
         snprintf(stats_text + n, sizeof stats_text - n, ", geometry bound in place %.0f MB, from the VRAM copy %.0f MB, "
                  "draws reading guest memory %llu", stat_fetch_ram / 1048576.0, stat_fetch_vram / 1048576.0,
