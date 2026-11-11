@@ -51,6 +51,10 @@ uint64_t vk_draw_total(void) { return draws_total; }  // (device.c boot_held: ho
 static uint64_t stat_gw_waits, stat_gw_holds;  // draws / dispatches that waited for a storing shader; lists held (gw_check)
 static uint64_t stat_uub, stat_uub_same, stat_gcopy_hit, stat_gcopy_miss, stat_gcopy_bytes;  // UpdateUniformBuffer; guest_copy cache
 static uint64_t stat_ubo_direct, stat_chain_barriers;  // constant buffers bound in place (ubo_direct)
+// Where the GPU reads the game's memory from: the vertex / index ranges draws bind in place from the import (system
+// memory, across PCIe on a discrete GPU) or from its copy in video memory (guest_fetch; the ranges as bound, summed over
+// the draws), and the draws whose shaders read guest memory (global memory: the import)
+static uint64_t stat_fetch_ram, stat_fetch_vram, stat_gmem_draws;
 static void ubo_check_done(bool report);
 static void ubo_check_submit(uint64_t seq);
 static uint64_t stat_feedback_live;  // depth attachments sampled as they are (read-only feedback, no copy)
@@ -1373,6 +1377,11 @@ const char *renderer_stats(void) {
             snprintf(stats_text + n, sizeof stats_text - n, ", pass barriers skipped %llu (restarts %llu)",
                      (unsigned long long)stat_lazy_skipped, (unsigned long long)stat_lazy_restarts);
         stat_lazy_skipped = stat_lazy_restarts = 0;
+        n = strlen(stats_text);
+        snprintf(stats_text + n, sizeof stats_text - n, ", geometry bound in place %.0f MB, from the VRAM copy %.0f MB, "
+                 "draws reading guest memory %llu", stat_fetch_ram / 1048576.0, stat_fetch_vram / 1048576.0,
+                 (unsigned long long)stat_gmem_draws);
+        stat_fetch_ram = stat_fetch_vram = stat_gmem_draws = 0;
         stat_uub = stat_uub_same = stat_gcopy_hit = stat_gcopy_miss = stat_gcopy_bytes = stat_ubo_direct = stat_chain_barriers = 0;
         ubo_check_done(true);
         stat_gw_waits = stat_gw_holds = 0;
@@ -6363,6 +6372,7 @@ static void hc_list_begin(void) {
 static bool guest_fetch(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off) {
     if (gsnap_verts() && size && size <= gsnap_verts_max() && !gw_overlaps(addr, addr + size)) return false;  // (copied)
     if (!guest_direct(addr, size, buf, off)) return false;
+    stat_fetch_ram += size;  // (in place, unless the copy holds it: below)
     if (!hc_nch) return true;
     if (chunk_hold || !size || addr + size > HEAP_BASE + hc_size || gw_overlaps(addr, addr + size)) {
         hc_stat_inplace++;
@@ -6395,6 +6405,7 @@ static bool guest_fetch(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSiz
     }
     if (!all) { hc_stat_inplace++; return true; }
     hc_stat_mirror++;
+    stat_fetch_ram -= size, stat_fetch_vram += size;
     ch->fetches++;
     *buf = ch->buf;
     *off = o - hc_base(c);
@@ -8102,6 +8113,7 @@ static void draw_(CmdRec *r, bool indexed) {
     begin_pass();
     if (lazy) lb_draw_after(pr);
     if (pass_void) { stat_skipped++; return; }
+    if (pr->vi->uses_gmem || pr->fi->uses_gmem) stat_gmem_draws++;
     // ---- motion vectors (mvec.c): an opaque draw of a pass with the motion target is recorded (its identity and the
     // vertex shader's inputs, for the next frame); matched with one of the previous frame, it is drawn with its motion
     // program: the vertex shader also run on the previous frame's inputs, the fragment shader also writing the distance
