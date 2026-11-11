@@ -815,6 +815,16 @@ test-bloom-scale: $(B)/test_bloom_scale
 
 .PHONY: test-bloom-scale
 
+# The GPU-timed frame timers (SAVAGEWIND_VK_COUNTER=gpu): busy time per frame from submission timestamps, and the scale
+$(B)/test_frame_timers: tests/test_frame_timers.c runtime/nvn/vulkan/frame_timers.h
+	@mkdir -p $(B)
+	$(CC) -O1 -Wall -Wextra -Werror -o $@ $< -lm
+
+test-frame-timers: $(B)/test_frame_timers
+	$(B)/test_frame_timers
+
+.PHONY: test-frame-timers
+
 $(B)/test_audio_mix: tests/test_audio_mix.c runtime/audio_mix.h runtime/settings.h
 	@mkdir -p $(B)
 	$(CC) -O1 -Wall -Wextra -Werror -o $@ $< -lm

@@ -34,6 +34,8 @@ void rt_vfr_update(uint64_t vfr);
 // The game's frames so far (rt_vfr_update calls, game thread): what the matrices of one frame share (the jitter)
 uint64_t framepace_game_frame(void);
 uint64_t framepace_shown_frame(void);  // (the game's frames that were presented: one per present, paused too)
+// The interval the game was last given (rt_vfr_update): 1 above ~43 fps (its 60 fps ways), 2 below ~35, 3 below ~23
+unsigned framepace_interval(void);
 
 // SAVAGEWIND_SCRIPT_CLOCK=1: the frame number test scripts use, in 30ths of a second (once per presented frame);
 // otherwise the presented frames.

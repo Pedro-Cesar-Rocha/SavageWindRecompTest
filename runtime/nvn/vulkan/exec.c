@@ -41,6 +41,7 @@
 #include "../../services/fs_layout.h"
 #include "../../perfcount.h"
 #include "../hud_scale.h"
+#include "frame_timers.h"
 
 static uint64_t stat_build_waits;  // draws that waited for their pipeline (draw_must_happen)
 static uint64_t stat_links_now;    // pipelines linked on the render thread within the frame's budget (link_now)
@@ -151,8 +152,9 @@ void vk_collect_dead(void);
 #define SUBS 32  // (several a frame: long command lists go to the GPU in pieces, see begin_pass)
 typedef struct {
     VkCommandBuffer main, upload;
-    bool main_begun, upload_begun, ts;  // ts: GPU timestamps written (profiling)
+    bool main_begun, upload_begun, ts;  // ts: GPU timestamps written (profiling, counter_gpu)
     uint64_t seq;
+    uint64_t ts_frame;  // (ts) the presented frame (vk_frame_counter) the main buffer was begun in
     VkDescriptorPool pools[64];  // (BOTW 1.8.2 records thousands of draws into one submission)
     int npools, cur_pool;
 } Sub;
@@ -227,15 +229,53 @@ void vk_wait_seq(uint64_t seq) {
 uint64_t vk_pending_seq(void) { return submit_seq + 1; }
 
 uint64_t renderer_present_count(void);
+uint64_t vk_frame_counter(void);
+
+// ---- SAVAGEWIND_VK_COUNTER=gpu, with Video > Advanced > Dynamic resolution on (CMD_REPORT_COUNTER): the game's two
+// frame timers carry the GPU's own time instead of this thread's. Its dynamic resolution then answers the GPU: it
+// lowers the 3D resolution (1600x900 down to 1280x720, before the output scale) when the GPU can't keep the chosen
+// frame rate and raises it again when it can. Each submission writes a timestamp where its main buffer begins and one
+// where it ends (the profiling ones); when its slot comes round again they are read, in submission order, and the time
+// the GPU was busy with each presented frame is added up: overlapping submissions once, the gaps between them (the
+// GPU waiting for this thread or the game) not at all, so a frame held up by the CPU doesn't lower the resolution.
+// The game's budget is a frame at its interval (framepace_interval: 1/60 s above ~43 fps), so the busy time is
+// scaled by the ratio of that to the chosen rate's period (75 fps: x1.25): the GPU's time against the chosen rate.
+// With no limit, unscaled (the game's own budget). Off by default: the game's thresholds are its own, untested here
+// against every GPU.
+static int counter_gpu_on = -1;
+static bool counter_gpu(void) {
+    if (counter_gpu_on < 0) {
+        const char *e = getenv("SAVAGEWIND_VK_COUNTER");
+        counter_gpu_on = e && !strcmp(e, "gpu");
+        if (counter_gpu_on) LOG("[vk] frame timers: the GPU's busy time, scaled to the frame rate (with Dynamic resolution on)\n");
+    }
+    return counter_gpu_on;
+}
+static FrameBusy dr_busy = FRAME_BUSY_INIT;  // (frame_timers.h) the frame being added up
+static uint64_t dr_frame_ns;  // the GPU's busy time of the last whole frame read, ns (0: none yet)
+static void dr_note(uint64_t frame, uint64_t t0, uint64_t t1) {
+    uint64_t ticks;
+    if (frame_busy_note(&dr_busy, frame, t0, t1, &ticks))
+        __atomic_store_n(&dr_frame_ns, (uint64_t)((double)ticks * g_vk.props.limits.timestampPeriod), __ATOMIC_RELAXED);
+}
+// The time the game is given between its first timer of a frame and the later ones, ns (100 ms at most)
+static uint64_t dr_report_ns(void) {
+    double r = (double)__atomic_load_n(&dr_frame_ns, __ATOMIC_RELAXED) *
+               frame_timer_scale(framepace_target(), framepace_period_ns() / 1e9, framepace_interval());
+    return r > 100e6 ? 100000000ull : (uint64_t)r;
+}
+
 static void gp_collect(bool block);
 static Sub *sub(void) {
     Sub *s = &subs[cur_sub];
     if (s->seq != submit_seq + 1) {  // slot reused: its previous submission must be done
         vk_wait_seq(s->seq);
-        if (s->ts) {  // (profiling) GPU time of that submission
+        if (s->ts) {  // (profiling, counter_gpu) GPU time of that submission
             uint64_t t[2];
-            if (vkGetQueryPoolResults(g_vk.dev, prof_qp, (uint32_t)cur_sub * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0])
+            if (vkGetQueryPoolResults(g_vk.dev, prof_qp, (uint32_t)cur_sub * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS && t[1] > t[0]) {
                 prof_gpu += (uint64_t)((double)(t[1] - t[0]) * g_vk.props.limits.timestampPeriod);
+                if (counter_gpu()) dr_note(s->ts_frame, t[0], t[1]);
+            }
             s->ts = false;
         }
         gp_collect(false);  // (the profiler: that submission's GPU time, and any older)
@@ -261,10 +301,11 @@ VkCommandBuffer vk_cmd(void) {
         begin_cb(&s->main, &s->main_begun);
         dyn_epoch++;
         gp_mark(s->main, "(submission start; includes GPU idle before it)");
-        if (prof && prof_qp) {
+        if (prof_qp) {  // (made with SAVAGEWIND_VK_PROF or counter_gpu: vk_exec_init)
             rec_CmdResetQueryPool(s->main, prof_qp, (uint32_t)cur_sub * 2, 2);
             rec_CmdWriteTimestamp2(s->main, VK_PIPELINE_STAGE_2_NONE, prof_qp, (uint32_t)cur_sub * 2);
             s->ts = true;
+            s->ts_frame = vk_frame_counter();
         }
         gp_begin(s->main);
     }
@@ -1275,6 +1316,10 @@ const char *renderer_stats(void) {
         n = strlen(stats_text);
         if (stat_links_now) snprintf(stats_text + n, sizeof stats_text - n, ", links now %llu", (unsigned long long)stat_links_now);
         stat_links_now = 0;
+        n = strlen(stats_text);
+        if (counter_gpu() && g_settings.dynamic_res)  // (the last whole frame's GPU busy time, and what the game is told)
+            snprintf(stats_text + n, sizeof stats_text - n, ", frame timers: GPU %.1f ms, given %.1f ms",
+                     __atomic_load_n(&dr_frame_ns, __ATOMIC_RELAXED) / 1e6, dr_report_ns() / 1e6);
         stat_uub = stat_uub_same = stat_gcopy_hit = stat_gcopy_miss = stat_gcopy_bytes = stat_ubo_direct = stat_chain_barriers = 0;
         ubo_check_done(true);
         stat_gw_waits = stat_gw_holds = 0;
@@ -1362,8 +1407,8 @@ void vk_exec_init(void) {
     profd = prof && atoi(getenv("SAVAGEWIND_VK_PROF")) != 2;
     prof_gpu_finish_hook(gp_finish_capture);
     no_dyn_cache = getenv("SAVAGEWIND_VK_NO_DYN_CACHE") != NULL;
-    if (prof) {
-        prof_up_ns = 0;
+    if (prof) prof_up_ns = 0;
+    if (prof || counter_gpu()) {  // (each submission's GPU time: sub())
         VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = SUBS * 2};
         if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &prof_qp) != VK_SUCCESS) prof_qp = VK_NULL_HANDLE;
     }
@@ -10858,7 +10903,8 @@ static void exec_list(uint64_t handle, int depth) {
             // scale. A PC GPU does that work in a fraction of the Switch's time: every counter of a presented frame
             // gets the same timestamp (no GPU time), so the game keeps 1600x900. Video > Advanced > Dynamic
             // resolution (on with the Potato preset), or SAVAGEWIND_VK_COUNTER=live: the time of each counter (as
-            // before): the game lowers its 3D resolution when the frame takes long.
+            // before): the game lowers its 3D resolution when the frame takes long. SAVAGEWIND_VK_COUNTER=gpu with
+            // Dynamic resolution on: the GPU's own time against the chosen frame rate instead (counter_gpu, above).
             uint64_t *out = (uint64_t *)(uintptr_t)r->x[1];
             uint32_t type = (uint32_t)r->x[0];
             static uint32_t seen;
@@ -10870,11 +10916,19 @@ static void exec_list(uint64_t handle, int depth) {
                     st.rt.ncolor && st.rt.color[0] ? st.rt.color[0]->height : st.rt.depth ? st.rt.depth->height : 0);
             static int frozen = -1;
             if (frozen < 0) { const char *e = getenv("SAVAGEWIND_VK_COUNTER"); frozen = !e || strcmp(e, "live"); }
-            static uint64_t frame_seen = ~0ull, frame_ts;
-            extern uint64_t vk_frame_counter(void);
+            static uint64_t frame_seen = ~0ull, frame_ts, frame_timers, ts_last;
             bool fixed = frozen && !g_settings.dynamic_res;
-            if (fixed && vk_frame_counter() != frame_seen) { frame_seen = vk_frame_counter(); frame_ts = SDL_GetTicksNS(); }
-            uint64_t ts = fixed ? frame_ts : SDL_GetTicksNS();
+            // (counter_gpu: the frame's first timer at the frame's start, every later one the GPU's last whole frame,
+            // scaled, after it - TIMESTAMP_TOP 16 and TIMESTAMP 0 only; never a time before one given earlier)
+            bool gpu_timed = counter_gpu() && g_settings.dynamic_res && (type == 0 || type == 16);
+            if ((fixed || gpu_timed) && vk_frame_counter() != frame_seen) {
+                frame_seen = vk_frame_counter();
+                uint64_t now = SDL_GetTicksNS();
+                frame_ts = now > ts_last ? now : ts_last + 1;
+                frame_timers = 0;
+            }
+            uint64_t ts = gpu_timed ? frame_ts + (frame_timers++ ? dr_report_ns() : 0) : fixed ? frame_ts : SDL_GetTicksNS();
+            if (gpu_timed && ts > ts_last) ts_last = ts;
             if (type == 1 && out && oq_on()) {  // SAMPLES_PASSED: written once the queries' submission is done
                 pthread_mutex_lock(&readback_lock);
                 if (oq_nreports == 32) { pthread_mutex_unlock(&readback_lock); renderer_flush(); pthread_mutex_lock(&readback_lock); oq_apply(); }

@@ -368,6 +368,8 @@ float rt_snd_frame_floor(void) {
 
 static uint64_t game_frames;  // rt_vfr_update calls: the game's frames (framepace_game_frame)
 uint64_t framepace_game_frame(void) { return __atomic_load_n(&game_frames, __ATOMIC_RELAXED); }
+static uint32_t g_vfr_interval = 2;  // (rt_vfr_update, game thread) the interval the game was last given
+unsigned framepace_interval(void) { return __atomic_load_n(&g_vfr_interval, __ATOMIC_RELAXED); }
 // Experimental #305: the surf controller can still report contact on the update after takeoff at 120 fps.
 // Removing its previous 11-unit boost then can cancel the jump. Protect takeoff for one console frame, with
 // one impulse only. Lower rates keep the original path. This hypothesis still needs in-game validation.
@@ -519,6 +521,7 @@ void rt_vfr_update(uint64_t vfr) {
     VF(uint32_t, vfr, VFR_INTERVAL) = iv;
     VF(uint8_t, vfr, VFR_CHANGED) = last_iv && iv != last_iv;
     last_iv = iv;
+    __atomic_store_n(&g_vfr_interval, iv, __ATOMIC_RELAXED);
     input_cam_frame(ratio);
     if (log_every > 0 && nframe++ % (uint64_t)log_every == 0) {
         uint64_t pinfo = *(uint64_t *)(uintptr_t)g_site.player_info;  // (Link's position: PlayerInfo +0x88)

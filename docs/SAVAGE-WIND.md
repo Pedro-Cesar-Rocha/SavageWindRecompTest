@@ -708,7 +708,13 @@ Pendiente:
        tiempo de GPU que miden los contadores de `nvnCommandBufferReportCounter`; medían nuestra traducción y el
        mundo abierto bajaba a 1280x720. Ahora todos los contadores de un frame llevan la misma marca de tiempo (sin
        tiempo de GPU) y el juego se queda en 1600x900 (`SAVAGEWIND_VK_COUNTER=live`: como antes). El paso a 20 FPS
-       no depende de ellos (usa el cronómetro de CPU del juego).
+       no depende de ellos (usa el cronómetro de CPU del juego). Experimento (`SAVAGEWIND_VK_COUNTER=gpu`, con
+       Resolución dinámica activada): los dos contadores de un frame difieren en el tiempo que la GPU estuvo ocupada
+       con el último frame completo (timestamps al principio y al final de cada submission, solapes una sola vez y sin
+       los huecos en que la GPU esperaba a la CPU), escalado por el presupuesto del juego (un frame a su intervalo,
+       1/60 s por encima de ~43 FPS) sobre el período de la tasa elegida (75 FPS: x1,25): el juego baja su 3D cuando
+       la GPU no llega a esa tasa. La línea `[vk] t=` muestra `frame timers: GPU <ms>, given <ms>` y cada cambio de
+       tamaño sale como `[post] scene ...`. `frame_timers.h`, `make test-frame-timers`. Sin validar en juego.
      Pruebas: `SAVAGEWIND_UPSCALE_AT=<frame>:<off|ultra|quality|balanced|performance>,...` cambia el escalador en
      esos frames (A/B de la misma vista en una corrida), `SAVAGEWIND_SCENE_FSR=0` deja la composición bilineal del
      juego, `SAVAGEWIND_NO_SCALE=1` no escala nada. Una ventana oculta de 3840x2160 funciona aunque el escritorio sea
