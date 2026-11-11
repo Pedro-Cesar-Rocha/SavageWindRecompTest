@@ -31,6 +31,7 @@ jobs:
       simd: ${{ steps.filter.outputs.simd }}
       translate: ${{ steps.filter.outputs.translate }}
       feedback_alias: ${{ steps.filter.outputs.feedback_alias }}
+      lazy_barriers: ${{ steps.filter.outputs.lazy_barriers }}
     steps:
       - uses: dorny/paths-filter@v4
         id: filter
@@ -59,6 +60,10 @@ jobs:
             feedback_alias:
               - 'runtime/nvn/vulkan/exec.c'
               - 'tools/test_feedback_alias.py'
+              - '.github/workflows/tests.yml'
+            lazy_barriers:
+              - 'runtime/nvn/vulkan/exec.c'
+              - 'tools/test_lazy_barriers.py'
               - '.github/workflows/tests.yml'
             translate:
               - 'runtime/nvn/maxwell/**'
@@ -137,3 +142,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 tools/test_feedback_alias.py
+
+  # Passes begin without a barrier only where nothing before them since the last one conflicts with them.
+  lazy_barriers:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.lazy_barriers == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: python3 tools/test_lazy_barriers.py

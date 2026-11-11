@@ -331,21 +331,67 @@ static int bar_n;
 
 void vk_pass_barrier_forget(void) { bar_other = true; }
 
+// ---- Pass barriers only where a pass depends on the work before it (SAVAGEWIND_VK_LAZY_BARRIERS=0: a barrier before
+// every pass, as before). The barrier a pass began behind waited for all GPU work before it and made the earlier
+// passes' attachment writes visible to every later read. On AMD's GCN chips (Polaris, Vega) the colour and depth
+// caches are not coherent with L2, so for an image barrier too the driver flushes them and invalidates the whole L2
+// (RADV: radv_image_is_l2_coherent is false there): each of BOTW's ~185 passes a frame began with an idle GPU and an
+// empty L2, most behind nothing they read. Now a pass that follows only other passes (bar_other false) begins without
+// one when it can't conflict with them: none of its attachments was drawn into (bar_img) or sampled (lb_read) since
+// the last barrier. Before a draw is recorded, what it reads is looked up (lb_draw): an image a pass drew into since
+// the last barrier (other than the draw's own targets: those are resolve_feedback's), a storage image, or a store of
+// its own to guest memory, and the barrier is made first - the pass in progress, if it began without one, ends and
+// begins again behind it. A draw that stores to guest memory makes the next pass begin behind a full barrier (vertex
+// data, constants and other stores read after it). Copies, clears outside passes and dispatches keep their full
+// barriers (bar_other), and so does the pass after them. What was drawn into and sampled since the last barrier is a
+// mark on each image's backend (TexBackend lb_drawn / lb_read: the barrier epoch it happened in), so a draw's lookups
+// cost a compare each.
+static uint32_t lb_epoch = 1;  // (bumped by every barrier: the marks of the ones before are out of date)
+static bool lb_force;          // a draw about to be recorded needs the barrier first (lb_draw)
+static bool lb_open;           // the pass in progress began without a barrier
+static uint32_t lb_passes;     // passes begun since the last barrier
+static uint64_t stat_lazy_skipped, stat_lazy_restarts;
+static void lb_reset(void) {  // (a barrier: everything before it is done and visible)
+    lb_epoch++;
+    lb_force = false;
+    lb_passes = 0;
+}
+static int lazy_barriers_on = -1;
+static bool lazy_barriers(void) {
+    if (lazy_barriers_on < 0) {
+        const char *e = getenv("SAVAGEWIND_VK_LAZY_BARRIERS");
+        lazy_barriers_on = e ? atoi(getenv("SAVAGEWIND_VK_LAZY_BARRIERS")) != 0 : !g_vk.is_mali;
+        // (not with a barrier before every pass, nor with Mali's fragment-only pass barriers: begin_pass)
+        bool every = getenv("SAVAGEWIND_VK_FULL_PASS_BARRIER") != NULL;
+        const char *frag = getenv("SAVAGEWIND_VK_BARRIER_FRAG");
+        if (every || (frag ? atoi(frag) != 0 : g_vk.is_mali)) lazy_barriers_on = 0;
+        LOG("[vk] pass barriers only where a pass depends on the work before it: %s (SAVAGEWIND_VK_LAZY_BARRIERS=%d: %s)\n",
+            lazy_barriers_on ? "on" : "off", lazy_barriers_on ? 0 : 1, lazy_barriers_on ? "off" : "on");
+    }
+    return lazy_barriers_on;
+}
+
 // Pass barriers (begin_pass, SAVAGEWIND_VK_BARRIER_FRAG): GPU work outside passes (copies, dispatches, clears; each
 // preceded by a full barrier, below) or a draw that stores to memory may have written what a later pass's vertex stage
 // reads (vertex data, instance data a compute shader culled): the next pass begins behind a full barrier then.
 static bool vtx_hazard = true;
 static bool after_dispatch;  // nothing recorded since the last dispatch but its own commands (dispatch_compute)
 void vk_full_barrier(VkCommandBuffer cb) {
-    vtx_hazard = true;  // (begin_pass clears it after its own)
-    after_dispatch = false;
     VkMemoryBarrier2 mb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2, .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                            .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT, .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                            .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
     VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
     rec_CmdPipelineBarrier2(cb, &di);
+    // (lazy_barriers) The upload buffer runs before all of the main one, its barriers too (the one closing it, and
+    // those recorded while a pass is open: a texture uploaded for its draw), so they order nothing the main buffer
+    // records. The pass after a submission with uploads then began behind a full barrier; now it is judged by what it
+    // reads and draws into, as any other.
+    if (cb != subs[cur_sub].main && lazy_barriers_on > 0) return;
+    vtx_hazard = true;  // (begin_pass clears it after its own)
+    after_dispatch = false;
     bar_other = true;  // (what follows may write anything)
     bar_n = 0;
+    lb_reset();
 }
 
 static void pass_barrier(VkCommandBuffer cb) {
@@ -375,10 +421,12 @@ static void pass_barrier(VkCommandBuffer cb) {
                            .imageMemoryBarrierCount = (uint32_t)bar_n, .pImageMemoryBarriers = ib};
     rec_CmdPipelineBarrier2(cb, &di);
     bar_n = 0;
+    lb_reset();
 }
 
 static void pass_barrier_note(TexBackend *b) {  // a target of the pass begun
     if (!b || !b->image) return;
+    b->lb_drawn = lb_epoch;  // (lazy_barriers: drawn into since the last barrier)
     for (int i = 0; i < bar_n; i++) if (bar_img[i] == b->image) return;
     if (bar_n == 64) { bar_other = true; return; }
     bar_img[bar_n] = b->image;
@@ -1320,6 +1368,11 @@ const char *renderer_stats(void) {
         if (counter_gpu() && g_settings.dynamic_res)  // (the last whole frame's GPU busy time, and what the game is told)
             snprintf(stats_text + n, sizeof stats_text - n, ", frame timers: GPU %.1f ms, given %.1f ms",
                      __atomic_load_n(&dr_frame_ns, __ATOMIC_RELAXED) / 1e6, dr_report_ns() / 1e6);
+        n = strlen(stats_text);
+        if (lazy_barriers_on > 0)  // (passes begun without a barrier, and the ones a draw began again behind one)
+            snprintf(stats_text + n, sizeof stats_text - n, ", pass barriers skipped %llu (restarts %llu)",
+                     (unsigned long long)stat_lazy_skipped, (unsigned long long)stat_lazy_restarts);
+        stat_lazy_skipped = stat_lazy_restarts = 0;
         stat_uub = stat_uub_same = stat_gcopy_hit = stat_gcopy_miss = stat_gcopy_bytes = stat_ubo_direct = stat_chain_barriers = 0;
         ubo_check_done(true);
         stat_gw_waits = stat_gw_holds = 0;
@@ -2064,6 +2117,20 @@ static void vk_end_pass_at(int line) {
 
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
 
+// (lazy_barriers) the image of attachment t was drawn into or sampled since the last barrier
+static bool lb_target_busy(const NvnTexture *t) {
+    const TexBackend *b = t ? vk_tex_peek(t) : NULL;
+    return b && b->image && (b->lb_drawn == lb_epoch || b->lb_read == lb_epoch);
+}
+static bool lb_targets_busy(void) {  // (begin_pass) any attachment of the pass about to begin
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++)
+        if (lb_target_busy(st.rt.color[i])) return true;
+    if (lb_target_busy(st.rt.depth)) return true;
+    // (the motion target, which begin_pass appends to a pass with the scene's depth: mvec_pass_target)
+    const TexBackend *mt = mvec_target_img;
+    return st.rt.depth && mt && mt->image && mvec_enabled() && (mt->lb_drawn == lb_epoch || mt->lb_read == lb_epoch);
+}
+
 static void begin_pass(void) {
     after_dispatch = false;  // (dispatch_compute: a pass in between)
     if (in_pass && !st.rt_dirty) return;
@@ -2136,10 +2203,16 @@ static void begin_pass(void) {
                                .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT};
         VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &mb};
         rec_CmdPipelineBarrier2(cb, &di);
+        lb_open = false;
+    } else if (lazy_barriers() && !det_on() && !bar_other && !lb_force && !lb_targets_busy()) {
+        stat_lazy_skipped++;  // (only passes since the last barrier, none of them on its attachments: lazy_barriers)
+        lb_open = true;
     } else {
         pass_barrier(cb);  // passes, copies and dispatches see each other's results
         vtx_hazard = false;
+        lb_open = false;
     }
+    lb_passes++;
     {
         NvnTexture *t0n = st.rt.ncolor ? st.rt.color[0] : NULL;
         dl_note("pass %d color %ux%u fmt %#x depth %p", st.rt.ncolor, t0n ? t0n->width : 0, t0n ? t0n->height : 0, t0n ? t0n->format : 0,
@@ -4018,6 +4091,62 @@ static bool is_attachment(NvnTexture *t) {
     return false;
 }
 
+// (lazy_barriers; draw_, right before begin_pass) what the draw reads, marked (lb_read), and whether it needs the
+// barrier first: it samples an image a pass drew into since the last barrier that isn't one of its own targets (theirs
+// are resolve_feedback's: a pass whose targets were busy began behind the barrier), or it may write memory (a storage
+// image, a store to guest memory) while earlier passes since the barrier may still read it. A pass in progress that
+// began without the barrier ends: begin_pass makes it, and begins the pass again. The draw comes after that barrier,
+// so its reads are marked again in the new epoch (lb_draw_after) for the passes that follow - looked up again, as
+// begin_pass may have let an idle image go; the descriptors mark the image a texture first gets as well (texture_info_).
+static uint32_t lb_draw_epoch;
+static bool lb_draw_images;  // the draw has storage images: the passes after it begin behind a full barrier
+static bool lb_own_target(const TexBackend *s) {
+    for (int i = 0; i < st.rt.ncolor && i < 8; i++)
+        if (st.rt.color[i] && vk_tex_peek(st.rt.color[i]) == s) return true;
+    return st.rt.depth && vk_tex_peek(st.rt.depth) == s;
+}
+// Marks the draw's sampled images read in this epoch; true if one of them was drawn into in it by a pass other than the
+// draw's own, *images if it has storage images
+static bool lb_scan(Prog *pr, bool *images) {
+    bool drawn = false;
+    ShaderInfo *infos[2] = {pr->vi, pr->fi};
+    for (int sg = 0; sg < 2; sg++)
+        for (int i = 0; i < infos[sg]->ntex; i++) {
+            ShaderTexture *te = &infos[sg]->tex[i];
+            if (te->is_image) *images = true;
+            NvnTexture *t = shader_texture_object(sg, te);
+            NvnTexture *srcs[2] = {t, t && te->shadow ? shadow_copy_source(t) : NULL};  // (the copy's readers: the cascades)
+            for (int k = 0; k < 2; k++) {
+                TexBackend *b = srcs[k] ? vk_tex_peek(srcs[k]) : NULL;
+                if (!b || !b->image) continue;
+                if (b->lb_drawn == lb_epoch && !drawn && !lb_own_target(b)) drawn = true;
+                b->lb_read = lb_epoch;
+            }
+        }
+    return drawn;
+}
+static void lb_draw(Prog *pr) {
+    bool images = false, drawn = lb_scan(pr, &images);
+    lb_draw_epoch = lb_epoch;
+    lb_draw_images = images;
+    // (stores: only after passes since the last barrier, which may still read what they write; the pass in progress
+    // too, if it began without the barrier)
+    bool need = drawn || ((images || pr->vi->writes_gmem || pr->fi->writes_gmem) && lb_passes > 0);
+    if (!need) return;
+    if (in_pass && !st.rt_dirty) {
+        if (!lb_open) return;  // (it began behind the barrier: all it reads was made visible then)
+        vk_end_pass();
+        st.rt_dirty = true;
+        stat_lazy_restarts++;
+    }
+    lb_force = true;
+}
+static void lb_draw_after(Prog *pr) {  // (draw_, after begin_pass)
+    bool images = false;
+    if (lb_draw_epoch != lb_epoch) lb_scan(pr, &images);  // (a barrier since lb_draw: the draw's reads in the new epoch)
+    if (lb_draw_images) bar_other = true;  // (its image stores before what the passes after it read)
+}
+
 static TexBackend *snapshot_image(NvnTexture *t, TexBackend *src) {
     Snap *s = NULL;
     for (int i = 0; i < nsnaps; i++) if (snaps[i].key == t) s = &snaps[i];
@@ -5658,6 +5787,7 @@ static void gsnap_gpu_note(int stage);
 static void gw_note(int stage) {  // a shader of this stage that stores to global memory was recorded
     if (gsnap_mode()) gsnap_gpu_note(stage);  // (the GPU data list is read only by the copies: gsnap on)
     vtx_hazard = true;  // (the next pass's vertex stage may read it)
+    if (lazy_barriers()) bar_other = true;  // (its stores before what the passes after it read: a full barrier first)
     static int hold = -1;
     if (hold < 0) hold = getenv("SAVAGEWIND_VK_GMEM_HOLD") != NULL;
     if (chunk_hold) return;  // (the rest of the list goes in one piece anyway)
@@ -6451,6 +6581,10 @@ static void texture_info_(int stage, ShaderInfo *si, int i, VkDescriptorImageInf
                 if (v) view = v, layout = VK_IMAGE_LAYOUT_GENERAL;
             }
             TexBackend *eb = (TexBackend *)et->backend;
+            if (lazy_barriers_on > 0) {  // (lazy_barriers: the image this texture got, also a first one lb_draw couldn't see)
+                if (eb) eb->lb_read = lb_epoch;
+                if (cascades && cascades->backend) ((TexBackend *)cascades->backend)->lb_read = lb_epoch;
+            }
             if (st_->shadow && !cascades && view && eb && !(e->has_view && (e->view.setmask & 3))) {
                 VkImageView v = depth_twin_sample(eb, st_->type, stage == 5 && !vk_is_shadow_copy(et));  // (its depth twin)
                 if (v) view = v, layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -7963,7 +8097,10 @@ static void draw_(CmdRec *r, bool indexed) {
         prof_gw_check += now - prof_stage_start;
         prof_stage_start = now;
     }
+    bool lazy = lazy_barriers() && !det_on();
+    if (lazy) lb_draw(pr);  // (the barrier this draw needs, if the pass began without one)
     begin_pass();
+    if (lazy) lb_draw_after(pr);
     if (pass_void) { stat_skipped++; return; }
     // ---- motion vectors (mvec.c): an opaque draw of a pass with the motion target is recorded (its identity and the
     // vertex shader's inputs, for the next frame); matched with one of the previous frame, it is drawn with its motion

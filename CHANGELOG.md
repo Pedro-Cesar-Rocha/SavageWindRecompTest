@@ -5,6 +5,9 @@ What changed in each Savage Wind release. The `test` branch holds what the next 
 ## Next (on the `test` branch)
 
 - **Frame rate:** 75 fps, for 75 Hz displays; Match display picks it there instead of 60.
+- **Fewer GPU stalls:** a render pass waits for the GPU work before it only when it reads or draws into what that work
+  wrote. Each of the game's ~185 passes a frame began with an idle GPU, and on AMD's GCN cards (RX 400/500, Vega) also
+  with an emptied L2 cache. `SAVAGEWIND_VK_LAZY_BARRIERS=0` in the launch options puts the old barriers back.
 
 ## Alpha 5 (0.5.0-alpha.5) - 2026-11-08
 

@@ -46,6 +46,7 @@ play SAVAGEWIND_VK_NO_FEEDBACK_LOOP | 1 | Draws with copies instead of feedback 
 play SAVAGEWIND_VK_FEEDBACK_LOOP | 1 | Turns feedback loops on where they are held back for your graphics card.
 play SAVAGEWIND_VK_GPL | 1 | Turns pipeline libraries on where they are held back for your graphics driver.
 play SAVAGEWIND_VK_NO_GPL | 1 | Turns pipeline libraries off.
+play SAVAGEWIND_VK_LAZY_BARRIERS | 0 | 0 puts a barrier before every render pass again, as before. Try it if the picture is wrong.
 play SAVAGEWIND_VK_M5 | 1 | Turns on a Vulkan feature that the older-graphics-card mode leaves off.
 play SAVAGEWIND_VK_LEGACY | 1 | Uses the settings of Alpha 2 for the graphics driver: no maintenance5, pipeline libraries or feedback loops.
 play SAVAGEWIND_VK_HEAP_IMPORT | 1 | Gives the game's memory to the graphics card by import instead of export.

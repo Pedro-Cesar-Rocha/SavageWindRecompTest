@@ -158,9 +158,13 @@ typedef struct TexBackend {
     uint16_t block_slice;
     bool gpu_bc4;                // BC4 kept as BC4 though SAVAGEWIND_VK_BC4_CPU is on: the GPU draws into its blocks
     bool block_pending;          // (exec.c) the attachment view just made is block's: copy it after the pass
+    uint32_t lb_drawn, lb_read;  // (exec.c lazy_barriers) the barrier epoch a pass drew into it / a draw sampled it in
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)
+// The backend whose image t is now, without making or changing one: its own, or the one of another texture object over
+// the same memory and shape; NULL if none was made yet (exec.c's pass barriers)
+TexBackend *vk_tex_peek(const NvnTexture *t);
 VkFormat vk_format(uint32_t nvn_format);
 bool vk_format_alpha_one(uint32_t nvn_format);
 // View of t (optionally through an NVN texture view) for rendering or sampling.

@@ -406,6 +406,7 @@ const LfInfo LF_TABLE[] = {
     {"SAVAGEWIND_VK_HEAP_COPY_PEEK", LF_KIND_NUMBER, LF_GROUP_OTHER, "", ""},
     {"SAVAGEWIND_VK_HEAP_COPY_SPANS", LF_KIND_TEXT, LF_GROUP_OTHER, "", ""},
     {"SAVAGEWIND_VK_HEAP_IMPORT", LF_KIND_SWITCH, LF_GROUP_PLAY, "1", "Gives the game's memory to the graphics card by import instead of export."},
+    {"SAVAGEWIND_VK_LAZY_BARRIERS", LF_KIND_NUMBER, LF_GROUP_PLAY, "0", "0 puts a barrier before every render pass again, as before. Try it if the picture is wrong."},
     {"SAVAGEWIND_VK_LEAN_USAGE", LF_KIND_TEXT, LF_GROUP_OTHER, "", ""},
     {"SAVAGEWIND_VK_LEGACY", LF_KIND_TEXT, LF_GROUP_PLAY, "1", "Uses the settings of Alpha 2 for the graphics driver: no maintenance5, pipeline libraries or feedback loops."},
     {"SAVAGEWIND_VK_LIST_STATS", LF_KIND_SWITCH, LF_GROUP_DEV, "", ""},
@@ -476,4 +477,4 @@ const LfInfo LF_TABLE[] = {
     {"SAVAGEWIND_XLATE_VERIFY", LF_KIND_TEXT, LF_GROUP_DEV, "", ""},
     {"SAVAGEWIND_YAZ0", LF_KIND_NUMBER, LF_GROUP_OTHER, "", ""},
 };
-const int LF_TABLE_N = 472;
+const int LF_TABLE_N = 473;

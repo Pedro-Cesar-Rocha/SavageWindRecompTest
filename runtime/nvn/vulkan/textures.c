@@ -741,6 +741,12 @@ static void keyed_remove(TexBackend *b) {
     b->key_addr = 0;
 }
 
+TexBackend *vk_tex_peek(const NvnTexture *t) {
+    if (!t) return NULL;
+    if (t->backend) return t->backend;
+    return t->addr ? keyed_find(t) : NULL;  // (a texture object not used yet: the image tex_backend would give it)
+}
+
 // Lists that know each element's slot (index + 1, kept in the element; removal swaps the last one in)
 #define SLOT_LIST(name, T, slot)                                                                                    \
     static T **g_##name;                                                                                            \

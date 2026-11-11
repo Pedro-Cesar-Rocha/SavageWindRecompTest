@@ -1126,6 +1126,24 @@ Pendiente:
      `test` (36a02bc, con #108), 3+3 pasadas alternas sin límite de FPS a 1280x720 en una Radeon 660M: GPU por frame
      −1,9 % en Kakariko, −1,1 % en el establo del río y −1,9 % en la puerta de la Ciudad Gerudo; FPS +1,3 % en
      Kakariko (los otros dos, +1,1 y +0,8 %, dentro del ruido).
+   - Pases sin barrera donde no dependen de lo anterior (2026-11-11): en las GCN de AMD (Polaris, Vega) las cachés de
+     color y profundidad no son coherentes con la L2, así que también una barrera por imagen las vacía e invalida la
+     L2 entera (`radv_image_is_l2_coherent` es falso ahí), y cada uno de los ~185 pases por frame empezaba con la GPU
+     parada. Ahora un pase que solo sigue a otros pases (`bar_other` en falso) empieza sin barrera si ninguno de sus
+     attachments (ni el target de movimiento del TAA, que se añade a los pases con la profundidad de la escena) se
+     dibujó ni se muestreó desde la última barrera: marcas por época en cada `TexBackend` (`lb_drawn`, `lb_read`; la
+     época sube con cada barrera del buffer principal). Antes de grabar un draw (`lb_draw`) se miran sus texturas: si
+     un pase dibujó una desde la última barrera (salvo los targets del propio draw: eso es del feedback), o si el
+     draw escribe memoria (imágenes de almacenamiento, memoria global) habiendo pases desde la barrera, va la barrera
+     primero; si el pase en curso empezó sin ella, termina y vuelve a empezar detrás. Tras un draw que escribe memoria
+     del juego o imágenes de almacenamiento, el pase siguiente va tras una barrera completa (`bar_other`). Las barreras
+     del buffer de subidas (la que lo cierra al enviar y las de una textura subida con un pase abierto) ya no tocan
+     nada de esto: corren antes de todo el buffer principal, así que no ordenan nada de lo que este graba (antes el
+     primer pase tras cada envío con subidas iba tras una barrera completa). `SAVAGEWIND_VK_LAZY_BARRIERS=0`: una
+     barrera antes de cada pase, como antes; también apagado en Mali y con `SAVAGEWIND_VK_FULL_PASS_BARRIER` o
+     `SAVAGEWIND_VK_BARRIER_FRAG`. La línea `[vk] t=` cuenta los pases sin barrera y los que un draw hizo empezar de
+     nuevo. Las decisiones se prueban sobre pases sintéticos (`tools/test_lazy_barriers.py`); sin medir aún en una GPU
+     ni con la validación de sincronización.
    - Fallos gráficos que quedaban en la Alpha 2 (2026-10-22):
      - Consulta de oclusión del sol: `ReportCounter` con `SAMPLES_PASSED` (tipo 1) devolvía siempre 0 muestras y
        `ResetCounter` no hacía nada. BOTW dibuja una vez por frame el disco del sol con prueba de profundidad y sin
